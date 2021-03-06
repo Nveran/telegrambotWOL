@@ -53,7 +53,7 @@ def start_message(message):
             message.chat.id) + '\nПожалуйста, укажите его в файле settings.ini, следуя примечаниям в файле, затем,'
                                ' перезапустите программу и отправьте команду\n /start')
     elif str(message.chat.id) == USER:  # проверка на соответсвие id user
-        bot.send_message(message.chat.id, 'Приветствую, администратор! Хотите включить компьтер?',
+        bot.send_message(message.chat.id, 'Приветствую, администратор! Хотите включить компьютер?',
                          reply_markup=keyboard1)  # отправка сообщения в telegram
         logs_or_print('обнаружен администратор: ' + str(message.chat.id))  # отправка id пользователя в консоль
     elif str(message.chat.id) != USER:  # проверка id администратора
