@@ -1,6 +1,8 @@
+from models import Computer
+from models import User
 import configparser
 import telebot
-from wakeonlan import send_magic_packet
+from telebot import types
 from time import sleep
 
 # работа с файлами settings и token
@@ -11,72 +13,137 @@ config.read("token.ini")  # читаем токен
 # подключение токена
 bot = telebot.TeleBot(config['Token']['token'])
 
-# подключение переменных из файла settings.ini
-USER = config['telegrambotWOL']['user']
-MAC_address = config['telegrambotWOL']['mac_address']
-IP_address = config['telegrambotWOL']['ip_address']
-PORT = int(config['telegrambotWOL']['port'])
-logs = config.getboolean('telegrambotWOL', 'logs')
-
 # переменные для кнопок клавиатуры и реакции на них
-no_msg = 'нет'
-yes_msg = 'да'
-on_computer_msg = 'включи компьютер'
-work_check_msg = 'проверка работы бота'
+NO_MSG = 'нет'
+YES_MSG = 'да'
+ON_COMPUTER_MSG = 'включи компьютер'
+WORK_CHEK_MSG = 'проверка работы бота'
+
+
+User.create_table()
+Computer.create_table()
+
+
+def checking_records():
+    is_exists = User.select().exists()
+    return is_exists
+
 
 # включение кнопок клавиатуры в боте
 keyboard1 = telebot.types.ReplyKeyboardMarkup()
 keyboard2 = telebot.types.ReplyKeyboardMarkup()
-keyboard1.row(yes_msg, no_msg)
-keyboard2.row(on_computer_msg, work_check_msg)
+keyboard1.row(YES_MSG, NO_MSG)
+keyboard2.row(ON_COMPUTER_MSG, WORK_CHEK_MSG)
 
 
-# если Logs True пишет данные из консоли в файл, если нет, то просто в консоль
-def logs_or_print(data):
-    if logs:
-        print(data)
-        logs_file = open('logs.txt', 'a')
-        logs_file.write(data + '\n')
-        logs_file.close()
-    else:
-        print(data)
+# для создания объектов введенных данных
+class TempRegistrationField:
+    def __init__(self, telegram_id, field_name, value):
+        self.telegram_id = telegram_id
+        self.field_name = field_name
+        self.value = value
+
+
+registration_values = set()
 
 
 # поведение при команде /start
-@bot.message_handler(commands=['start'])
-def start_message(message):
-    if USER == '0':  # проверка первого запуска и отправка инструкции
-        bot.send_message(message.chat.id, 'Приветствую, это первый запуск telegrambotWOL \nВаш id: ' + str(
-            message.chat.id) + '\nПожалуйста, укажите его в файле settings.ini, следуя примечаниям в файле, затем,'
-                               ' перезапустите программу и отправьте команду\n /start')
-        logs_or_print('Приветствую, это первый запуск telegrambotWOL \nВаш id: ' + str(
-            message.chat.id) + '\nПожалуйста, укажите его в файле settings.ini, следуя примечаниям в файле, затем,'
-                               ' перезапустите программу и отправьте команду\n /start')
-    elif str(message.chat.id) == USER:  # проверка на соответсвие id user
-        bot.send_message(message.chat.id, 'Приветствую, администратор! Хотите включить компьютер?',
-                         reply_markup=keyboard1)  # отправка сообщения в telegram
-        logs_or_print('обнаружен администратор: ' + str(message.chat.id))  # отправка id пользователя в консоль
-    elif str(message.chat.id) != USER:  # проверка id администратора
-        logs_or_print('обнаружен неизвестный пользователь: ' + str(message.chat.id))
-        # отправка id пользователя в консоль
-
-
-# поведение при ответах на команды
 @bot.message_handler(content_types=['text'])
-def send_text(message):
-    if str(message.chat.id) == USER:  # проверка id администратора
-        if message.text.lower() in (on_computer_msg, yes_msg):
-            bot.send_message(message.chat.id, 'сейчас будет ;)', reply_markup=keyboard2)
-            send_magic_packet(MAC_address, ip_address=IP_address,
-                              port=PORT)  # отправка пакета на включение PC
-            logs_or_print('пользователь ' + str(message.chat.id) + ' включил компьютер')
-        elif message.text.lower() == no_msg:
-            bot.send_message(message.chat.id, 'ну ладно :(', reply_markup=keyboard2)
-        elif message.text.lower() == work_check_msg:
-            bot.send_message(message.chat.id, 'я тут!', reply_markup=keyboard2)
-            logs_or_print('бот работает успешно!')
-    elif str(message.chat.id) != USER:  # проверка id администратора
-        logs_or_print('обнаружен неизвестный пользователь: ' + str(message.chat.id))
+def start_message(message):
+    if checking_records():  # проверка первого запуска и отправка инструкции
+        print('в базе есть запись в таблице Users')
+    elif message.text == '/start':
+        bot.send_message(message.chat.id, 'Приветствую, это первый запуск telegrambot_wol.\nДавайте проведем '
+                                          'первоначальную настройку. \nВаш id: ' + str(message.chat.id)
+                         + '\nХотите его сохранить, как id администратора, и начать настройку?',
+                         reply_markup=keyboard1)
+        registration_values.add(TempRegistrationField(message.chat.id, 'telegram_id', message.chat.id))
+        bot.register_next_step_handler(message, registration)
+
+
+def registration(message):
+    if message.text == YES_MSG:
+        bot.send_message(message.chat.id, 'Хорошо, тогда начнем.\nКак вы хотите, чтобы я к вам обращался?',
+                         reply_markup=types.ReplyKeyboardRemove())
+        bot.register_next_step_handler(message, retrieve_user_name)
+
+
+def retrieve_user_name(message): # баг, при попытке снова зарегаться, почему-то начинается эта функция
+    registration_values.add(TempRegistrationField(message.chat.id, 'user_name', message.text))
+    bot.send_message(message.chat.id, 'Принято!\nТеперь нужно указать MAC address Вашего компьютера')
+    bot.register_next_step_handler(message, retrieve_mac_address)
+
+
+def retrieve_mac_address(message):
+    registration_values.add(TempRegistrationField(message.chat.id, 'mac_address', message.text))
+    bot.send_message(message.chat.id, 'Теперь, укажите ip address вашего ПК в локальной сети, или Broadcast '
+                                      'вашей локальной сети. Например, если адрес вашего роутера 192.168.1.1 '
+                                      'то Broadcast будет 192.168.1.255. Если не хотите заморачиваться,'
+                                      ' можно просто указать ip address вашего ПК :). Узнать его можно,'
+                                      ' введя в командную строку вашего ПК команду:\nipconfig')
+    bot.register_next_step_handler(message, retrieve_ip_address)
+
+
+def retrieve_ip_address(message):
+    registration_values.add(TempRegistrationField(message.chat.id, 'ip_address', message.text))
+    bot.send_message(message.chat.id, 'Теперь, укажите порт вашего пк. '
+                                      'Это порт на который приходит "магический пакет" он же "Wake on LAN", '
+                                      'в большинстве случаев равен 9 или 7')
+    bot.register_next_step_handler(message, retrieve_port)
+
+
+def retrieve_port(message):
+    registration_values.add(TempRegistrationField(message.chat.id, 'port', message.text))
+    bot.send_message(message.chat.id, 'Ну а теперь, укажите, как будет называться ваш ПК в кнопках бота :)')
+    bot.register_next_step_handler(message, retrieve_computer_name)
+
+
+def retrieve_computer_name(message):
+    registration_values.add(TempRegistrationField(message.chat.id, 'computer_name', message.text))
+    telegram_id = None
+    user_name = None
+    computer_name = None
+    mac_address = None
+    ip_address = None
+    port = None
+    for field in registration_values:
+        if field.telegram_id != message.chat.id:
+            continue
+        if field.field_name == 'telegram_id':
+            telegram_id = field.value
+        elif field.field_name == 'user_name':
+            user_name = field.value
+        elif field.field_name == 'computer_name':
+            computer_name = field.value
+        elif field.field_name == 'mac_address':
+            mac_address = field.value
+        elif field.field_name == 'ip_address':
+            ip_address = field.value
+        elif field.field_name == 'port':
+            port = field.value
+
+    bot.send_message(message.chat.id, 'Настройка завершена!\n'
+                                      f'Ваш id telegram: {telegram_id}\n'
+                                      f'Ваше имя: {user_name}\n'
+                                      f'Имя вашего ПК: {computer_name}\n'
+                                      f'MAC address: {mac_address}\n'
+                                      f'IP address: {ip_address}\n'
+                                      f'Port: {port}\n'
+                                      'Все верно? ', reply_markup=keyboard1)
+    bot.register_next_step_handler(message, save_registration, telegram_id, user_name, computer_name, mac_address,
+                                   ip_address, port)
+
+
+def save_registration(message, telegram_id, user_name, computer_name, mac_address, ip_address, port):
+    if message.text == YES_MSG:
+        if telegram_id == message.chat.id:
+            users_str = User(telegram_id=telegram_id, user_name=user_name, admin=1)
+            computer_str = Computer(user_id=users_str, computer_name=computer_name, mac_address=mac_address,
+                                    ip_address=ip_address, port=port)
+            users_str.save()
+            computer_str.save()
+            bot.send_message(message.chat.id, 'Изменения сохранены!', reply_markup=types.ReplyKeyboardRemove())
+
 
 
 # метод связи с API Telegram
