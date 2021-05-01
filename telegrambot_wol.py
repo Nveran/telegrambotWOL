@@ -13,35 +13,30 @@ config.read("token.ini")  # читаем токен
 # подключение токена
 bot = telebot.TeleBot(config['Token']['token'])
 
-# переменные для кнопок клавиатуры и реакции на них
-NO_MSG = 'нет'
+# названия кнопок
 YES_MSG = 'да'
-ON_COMPUTER_MSG = 'включи компьютер'
-WORK_CHEK_MSG = 'проверка работы бота'
+NO_MSG = 'нет'
+ADD_NEW_COMPUTER = 'Добавить пк'
 
 
+# создает нужные таблицы при первом запуске в бд
 User.create_table()
 Computer.create_table()
 
 
+# проверяет наличие записей
 def checking_records():
     is_exists = User.select().exists()
     return is_exists
 
 
+# сверяет пользователя с базой
 def check_user_in_users(user_telegram_id):
     user = User.select().where(User.telegram_id == user_telegram_id).first()
     if user is None:
         return False
     elif user_telegram_id == user.telegram_id:
         return True
-
-
-# включение кнопок клавиатуры в боте
-keyboard1 = telebot.types.ReplyKeyboardMarkup()
-keyboard2 = telebot.types.ReplyKeyboardMarkup()
-keyboard1.row(YES_MSG, NO_MSG)
-keyboard2.row(ON_COMPUTER_MSG, WORK_CHEK_MSG)
 
 
 # для создания объектов введенных данных
@@ -52,6 +47,7 @@ class TempRegistrationField:
         self.value = value
 
 
+# подставляет конкретные имена компов для конкретного пользователя
 def buttons_comp(user_telegram_id):
     buttons = set()
     for computer in Computer.select().join(User).where(User.telegram_id == user_telegram_id):
@@ -66,25 +62,43 @@ def start_message(message):
     if checking_records() and check_user_in_users(message.chat.id) and message.text == '/start':
         keyboard = telebot.types.ReplyKeyboardMarkup()
         buttons = buttons_comp(message.chat.id)
-        keyboard.row(*buttons)
+        keyboard.row(*buttons, ADD_NEW_COMPUTER)
         bot.send_message(message.chat.id, 'Приветствую, администратор! Какой компьютер хотите включить?',
                          reply_markup=keyboard)
+    # включает выбранный компьютер
     elif check_user_in_users(message.chat.id) and message.text in (buttons_comp(message.chat.id)):
         keyboard = telebot.types.ReplyKeyboardMarkup()
         buttons = buttons_comp(message.chat.id)
-        keyboard.row(*buttons)
-        computer = Computer.select().join(User).where(Computer.computer_name == message.text, User.telegram_id == message.chat.id).first() # проверить на баги
-        send_magic_packet(computer.mac_address, ip_address=computer.ip_address,
-                            port=computer.port)
+        keyboard.row(*buttons, ADD_NEW_COMPUTER)
+        computer = Computer.select().join(User).where(Computer.computer_name == message.text,
+                                                      User.telegram_id == message.chat.id).first()
+        send_magic_packet(computer.mac_address, ip_address=computer.ip_address, port=computer.port)
         bot.send_message(message.chat.id, 'сейчас будет ;)', reply_markup=keyboard)
+    # начинает процесс первой регистрации
     elif checking_records() is False and message.text == '/start':
+        keyboard = telebot.types.ReplyKeyboardMarkup()
+        keyboard.row(YES_MSG, NO_MSG)
         bot.send_message(message.chat.id, 'Приветствую, это первый запуск telegrambot_wol.\nДавайте проведем '
-                                          'первоначальную настройку. \nВаш id: ' + str(message.chat.id)
+                                          f'первоначальную настройку. \nВаш id: {message.chat.id}'
                          + '\nХотите его сохранить, как id администратора, и начать настройку?',
-                         reply_markup=keyboard1)
+                         reply_markup=keyboard)
         registration_values = set()
         registration_values.add(TempRegistrationField(message.chat.id, 'telegram_id', message.chat.id))
         bot.register_next_step_handler(message, registration, registration_values)
+        # начинает процесс регистрации нового пк
+    elif check_user_in_users(message.chat.id) and message.text == ADD_NEW_COMPUTER:
+        keyboard = telebot.types.ReplyKeyboardMarkup()
+        keyboard.row(YES_MSG, NO_MSG)
+        bot.send_message(message.chat.id, 'Хотите добавить новый компьютер?', reply_markup=keyboard)
+        bot.register_next_step_handler(message, add_new_computer)
+
+
+def add_new_computer(message):
+    if message.text == YES_MSG:
+        registration_values = set()
+        bot.send_message(message.chat.id, 'Укажите MAC address Вашего компьютера',
+                         reply_markup=types.ReplyKeyboardRemove())
+        bot.register_next_step_handler(message, retrieve_mac_address, registration_values)
 
 
 def registration(message, registration_values):
@@ -125,6 +139,8 @@ def retrieve_port(message, registration_values):
 
 
 def retrieve_computer_name(message, registration_values):
+    keyboard = telebot.types.ReplyKeyboardMarkup()
+    keyboard.row(YES_MSG, NO_MSG)
     registration_values.add(TempRegistrationField(message.chat.id, 'computer_name', message.text))
     telegram_id = None
     user_name = None
@@ -147,28 +163,56 @@ def retrieve_computer_name(message, registration_values):
             ip_address = field.value
         elif field.field_name == 'port':
             port = field.value
-
-    bot.send_message(message.chat.id, 'Настройка завершена!\n'
+    # для добавления пк
+    if telegram_id is None and user_name is None and check_user_in_users(message.chat.id):
+        telegram_id = message.chat.id
+        username = User.select().where(User.telegram_id == message.chat.id).first()
+        user_name = username.user_name
+        bot.send_message(message.chat.id, 'Настройка завершена!\n'
+                                          f'Ваш id telegram: {telegram_id}\n'
+                                          f'Ваше имя: {user_name}\n'
+                                          f'Имя вашего ПК: {computer_name}\n'
+                                          f'MAC address: {mac_address}\n'
+                                          f'IP address: {ip_address}\n'
+                                          f'Port: {port}\n'
+                                          'Все верно? ', reply_markup=keyboard)
+        bot.register_next_step_handler(message, save_registration, telegram_id, user_name, computer_name, mac_address,
+                                       ip_address, port)
+    # для первой регистрации
+    else:
+        bot.send_message(message.chat.id, 'Настройка завершена!\n'
                                       f'Ваш id telegram: {telegram_id}\n'
                                       f'Ваше имя: {user_name}\n'
                                       f'Имя вашего ПК: {computer_name}\n'
                                       f'MAC address: {mac_address}\n'
                                       f'IP address: {ip_address}\n'
                                       f'Port: {port}\n'
-                                      'Все верно? ', reply_markup=keyboard1)
-    bot.register_next_step_handler(message, save_registration, telegram_id, user_name, computer_name, mac_address,
-                                   ip_address, port)
+                                      'Все верно? ', reply_markup=keyboard)
+        bot.register_next_step_handler(message, save_registration, telegram_id, user_name, computer_name, mac_address,
+                                       ip_address, port)
 
 
 def save_registration(message, telegram_id, user_name, computer_name, mac_address, ip_address, port):
-    if message.text == YES_MSG:
-        if telegram_id == message.chat.id:
-            users_str = User(telegram_id=telegram_id, user_name=user_name, admin=1)
-            computer_str = Computer(user_id=users_str, computer_name=computer_name, mac_address=mac_address,
-                                    ip_address=ip_address, port=port)
-            users_str.save()
-            computer_str.save()
-            bot.send_message(message.chat.id, 'Изменения сохранены!', reply_markup=types.ReplyKeyboardRemove())
+    keyboard = telebot.types.ReplyKeyboardMarkup()
+    buttons = buttons_comp(message.chat.id)
+    keyboard.row(*buttons, ADD_NEW_COMPUTER)
+    # для первой регистрации
+    if message.text == YES_MSG and telegram_id == message.chat.id and checking_records() is False:
+        users_str = User(telegram_id=telegram_id, user_name=user_name, admin=1)
+        computer_str = Computer(user_id=users_str, computer_name=computer_name, mac_address=mac_address,
+                                ip_address=ip_address, port=port)
+        users_str.save()
+        computer_str.save()
+        bot.send_message(message.chat.id, 'Изменения сохранены! Можете выбрать, какой компьютер включить.',
+                         reply_markup=keyboard)
+    # для добавления пк
+    elif message.text == YES_MSG and telegram_id == message.chat.id and check_user_in_users(message.chat.id):
+        user = User.select().where(User.telegram_id == message.chat.id).first()
+        computer_str = Computer(user_id=user.id, computer_name=computer_name, mac_address=mac_address,
+                                ip_address=ip_address, port=port)
+        computer_str.save()
+        bot.send_message(message.chat.id, 'Изменения сохранены! Можете выбрать, какой компьютер включить.',
+                         reply_markup=keyboard)
 
 
 # метод связи с API Telegram
